@@ -130,16 +130,6 @@ def get_gamma(tempz):
                                       -tf.square(temp_Z-temp_u_tensor3)/(2*temp_lambda_tensor3), axis=1))+1e-10
     return temp_p_c_z/tf.reduce_sum(temp_p_c_z, axis=-1, keepdims=True)
 
-# def get_gamma(tempz):
-#     temp_Z=T.transpose(K.repeat(tempz,n_centroid),[0,2,1])
-#     temp_u_tensor3=T.repeat(u_p.dimshuffle('x',0,1),batch_size,axis=0)
-#     temp_lambda_tensor3=T.repeat(lambda_p.dimshuffle('x',0,1),batch_size,axis=0)
-#     temp_theta_tensor3=theta_p.dimshuffle('x','x',0)*T.ones((batch_size,latent_dim,n_centroid))
-#
-#     temp_p_c_z=K.exp(K.sum((K.log(temp_theta_tensor3)-0.5*K.log(2*math.pi*temp_lambda_tensor3)-\
-#                        K.square(temp_Z-temp_u_tensor3)/(2*temp_lambda_tensor3)),axis=1))+1e-10
-#     return temp_p_c_z/K.sum(temp_p_c_z,axis=-1,keepdims=True)
-
 
 def vae_loss(x, x_decoded_mean):
     Z = tf.expand_dims(z, -1)        # z.shape(batch_size, latent)
@@ -188,17 +178,6 @@ def vae_loss(x, x_decoded_mean):
     _loss_scalar = tf.summary.scalar('loss', _loss)
     # return _loss
     return _loss, _latent_loss_scalar, _recon_loss_scalar, _loss_scalar
-
-#
-# def lr_decay():
-#     if dataset == 'mnist':
-#         adam_nn.lr.set_value(floatX(max(adam_nn.lr.get_value()*decay_nn,0.0002)))
-#         adam_gmm.lr.set_value(floatX(max(adam_gmm.lr.get_value()*decay_gmm,0.0002)))
-#     else:
-#         adam_nn.lr.set_value(floatX(adam_nn.lr.get_value()*decay_nn))
-#         adam_gmm.lr.set_value(floatX(adam_gmm.lr.get_value()*decay_gmm))
-#     print ('lr_nn:%f'%adam_nn.lr.get_value())
-#     print ('lr_gmm:%f'%adam_gmm.lr.get_value())
     
 # def epochBegin(epoch):
 #
@@ -321,6 +300,7 @@ n_train = 70000
 training_batch_size = 100
 n_batches = int(n_train / training_batch_size)
 modelDir = './'
+saver = tf.train.Saver()
 
 with tf.Session() as sess:
     sess.run(init_param)
@@ -345,3 +325,5 @@ with tf.Session() as sess:
         summary = tf.summary.scalar('acc_p_c_z', acc_tensor)
         acc_summary = sess.run(summary)
         writer.add_summary(acc_summary)
+    save_path = saver.save(sess, "./model/model.ckpt")
+    print("Model saved in path: %s" % save_path)
