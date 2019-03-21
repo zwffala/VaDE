@@ -40,6 +40,7 @@ def progress(count, total, status=''):
         sys.stdout.write('\n')
     sys.stdout.flush()
 
+
 def cluster_acc(Y_pred, Y):
   from sklearn.utils.linear_assignment_ import linear_assignment
   assert Y_pred.size == Y.size
@@ -49,6 +50,7 @@ def cluster_acc(Y_pred, Y):
     w[Y_pred[i], Y[i]] += 1
   ind = linear_assignment(w.max() - w)
   return sum([w[i,j] for i,j in ind])*1.0/Y_pred.size, w
+
 
 def load_data(dataset):
     path = 'dataset/'+dataset+'/'
@@ -108,6 +110,26 @@ def gmmpara_init():
     return theta_p,u_p,lambda_p
 
 
+def get_gamma(tempz):
+    # tempz.shape(batch, latent)
+    temp_Z = tf.expand_dims(tempz, -1)
+    temp_Z = tf.tile(temp_Z, [1, 1, n_centroid])
+
+    temp_u_tensor3 = tf.expand_dims(u_p, 0)
+    temp_u_tensor3 = tf.tile(temp_u_tensor3, [batch_size, 1, 1])
+
+    temp_lambda_tensor3 = tf.expand_dims(lambda_p, 0)
+    temp_lambda_tensor3 = tf.tile(temp_lambda_tensor3, [batch_size, 1, 1])
+
+    temp_theta_tensor3 = tf.expand_dims(theta_p, 0)
+    temp_theta_tensor3 = tf.tile(temp_theta_tensor3, [latent_dim, 1])
+    temp_theta_tensor3 = tf.expand_dims(temp_theta_tensor3, 0)
+    temp_theta_tensor3 = tf.tile(temp_theta_tensor3, [batch_size, 1, 1])
+
+    temp_p_c_z = tf.exp(tf.reduce_sum(tf.log(temp_theta_tensor3)-0.5*tf.log(2*math.pi*temp_lambda_tensor3)
+                                      -tf.square(temp_Z-temp_u_tensor3)/(2*temp_lambda_tensor3), axis=1))+1e-10
+    return temp_p_c_z/tf.reduce_sum(temp_p_c_z, axis=-1, keepdims=True)
+
 # def get_gamma(tempz):
 #     temp_Z=T.transpose(K.repeat(tempz,n_centroid),[0,2,1])
 #     temp_u_tensor3=T.repeat(u_p.dimshuffle('x',0,1),batch_size,axis=0)
@@ -151,18 +173,21 @@ def vae_loss(x, x_decoded_mean):
                   -tf.reduce_sum(tf.log(tf.tile(tf.expand_dims(theta_p, 0), [batch_size, 1]))*gamma, axis=-1) \
                   +tf.reduce_sum(tf.log(gamma)*gamma, axis=-1)   # latent_loss.shape(batch, )
     latent_loss = tf.reduce_mean(latent_loss)
-    latent_loss_scalar = tf.summary.scalar('latent_loss', latent_loss)
+    _latent_loss_scalar = tf.summary.scalar('latent_loss', latent_loss)
 
     if datatype == 'sigmoid':
-        recon_loss = alpha * original_dim * tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=x, logits=x_decoded_mean), axis=-1)   # recon_loss.shape(batch, )
+        # recon_loss = alpha * original_dim * tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=x, logits=x_decoded_mean), axis=-1)   # recon_loss.shape(batch, )
+        recon_loss = alpha * tf.reduce_sum(
+            tf.nn.sigmoid_cross_entropy_with_logits(labels=x, logits=x_decoded_mean), axis=-1)
     else:
         recon_loss = alpha * original_dim * tf.losses.mean_squared_error(labels=x, predictions=x_decoded_mean)
 
     recon_loss = tf.reduce_mean(recon_loss)
-    recon_loss_scalar = tf.summary.scalar('recon_loss', recon_loss)
-    loss = recon_loss + latent_loss
-    loss_scalar = tf.summary.scalar('loss', loss)
-    return loss
+    _recon_loss_scalar = tf.summary.scalar('recon_loss', recon_loss)
+    _loss = recon_loss + latent_loss
+    _loss_scalar = tf.summary.scalar('loss', _loss)
+    # return _loss
+    return _loss, _latent_loss_scalar, _recon_loss_scalar, _loss_scalar
 
 #
 # def lr_decay():
@@ -244,6 +269,8 @@ def resolve_variational_autoencoder(data, original_dim, intermediate_dim, latent
     z = z_mu + tf.exp(z_sigma/2) * eps  # z.shape(batch_size, latent)
     result = z
 
+    gamma = get_gamma(z)
+
     # construct the decoder dense layers
     decoder_layers = []
     for i in reversed(intermediate_dim):
@@ -256,11 +283,11 @@ def resolve_variational_autoencoder(data, original_dim, intermediate_dim, latent
     # construct the output layer
     _layer = tf.layers.Dense(units=original_dim,
                              trainable=trainable,
-                             activation=datatype)  # activation=(tf.nn.sigmoid if variational else None))
+                             activation=None)  # activation=(tf.nn.sigmoid if variational else None))
     decoder_layers.append(_layer)
     result = _layer.apply(result)
 
-    return _input, encoder_layers, z_mu, z_sigma, z, decoder_layers, result
+    return _input, encoder_layers, z_mu, z_sigma, z, gamma, decoder_layers, result
 
 
 dataset = 'mnist'
@@ -269,7 +296,8 @@ if db in ['mnist','reuters10k','har']:
     dataset = db
 print ('training on: ' + dataset)
 ispretrain = False
-batch_size = 100
+# batch_size = 100
+batch_size = tf.placeholder(dtype=tf.int32, shape=(), name='batch_size')
 latent_dim = 10
 intermediate_dim = [500,500,2000]
 accuracy=[]
@@ -279,17 +307,19 @@ data = tf.placeholder(tf.float32, shape=(None, original_dim), name='data')
 label = tf.placeholder(tf.float32, shape=(None, original_dim), name='label')
 theta_p,u_p,lambda_p = gmmpara_init()
 
-x, encoder_layers, z_mean, z_log_var, z, decoder_layers, x_decoded_mean = resolve_variational_autoencoder(data, original_dim, intermediate_dim, latent_dim, datatype)
+x, encoder_layers, z_mean, z_log_var, z, tempGamma, decoder_layers, x_decoded_mean = resolve_variational_autoencoder(data, original_dim, intermediate_dim, latent_dim, datatype)
 
-# _, latent_loss_scalar, recon_loss_scalar, loss_scalar = vae_loss(x, x_decoded_mean)
+loss, latent_loss_scalar, recon_loss_scalar, loss_scalar = vae_loss(x, x_decoded_mean)
+merged_summary_op = tf.summary.merge_all()
 
 global_step = tf.Variable(0, trainable=False)
-learning_rate = tf.train.exponential_decay(lr_nn, global_step, 7000, 0.9)
-optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, name='Adam_Optimizer').minimize(vae_loss(x, x_decoded_mean), global_step=global_step)
+learning_rate = tf.math.maximum(tf.train.exponential_decay(lr_nn, global_step, 7000, 0.9), 0.0002)
+optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, name='Adam_Optimizer').minimize(loss, global_step=global_step)
 init_param = tf.global_variables_initializer()
 
 n_train = 70000
-n_batches = int(n_train / batch_size)
+training_batch_size = 100
+n_batches = int(n_train / training_batch_size)
 modelDir = './'
 
 with tf.Session() as sess:
@@ -300,25 +330,18 @@ with tf.Session() as sess:
         random.shuffle(aidx)
         ptr = 0
         for j in range(n_batches):
-            inp = X[aidx[ptr:ptr + batch_size], :]
-            ptr += batch_size
-            _, _ce, _lr = sess.run([optimizer, vae_loss(x, x_decoded_mean), learning_rate], feed_dict={data: inp, label: inp})
+            inp = X[aidx[ptr:ptr + training_batch_size], :]
+            ptr += training_batch_size
+            _, _ce, _lr, summary = sess.run([optimizer, loss, learning_rate, merged_summary_op], feed_dict={data: inp, label: inp, batch_size: training_batch_size})
+
+            # acc = cluster_acc(tf.math.argmax(tempGamma, axis=1), Y[aidx[ptr:ptr + batch_size]])
+            # acc = cluster_acc(np.argmax(cluster_prec, axis=1), Y[aidx[ptr:ptr + batch_size]])
             progress(j + 1, n_batches, status=' Loss=%f, Lr=%f, Epoch=%d/%d' % (_ce, _lr, i + 1, epoch))
-            # writer.add_summary(latent_loss_scalar, recon_loss_scalar, loss_scalar, global_step)
-# Gamma = Lambda(get_gamma, output_shape=(n_centroid,))(z)
-# sample_output = Model(x, z_mean)
-# gamma_output = Model(x,Gamma)
-#
-# vade = Model(x, x_decoded_mean)
-#
-# adam_nn= Adam(lr=lr_nn,epsilon=1e-4)
-# adam_gmm= Adam(lr=lr_gmm,epsilon=1e-4)
-# vade.compile(optimizer=adam_nn, loss=vae_loss,add_trainable_weights=[theta_p,u_p,lambda_p],add_optimizer=adam_gmm)
-# epoch_begin=EpochBegin()
-#
-#
-# vade.fit(X, X,
-#         shuffle=True,
-#         nb_epoch=epoch,
-#         batch_size=batch_size,
-#         callbacks=[epoch_begin])
+            writer.add_summary(summary, i*n_batches+j)
+        cluster_prec = sess.run(tempGamma, feed_dict={data: X, label: X, batch_size: n_train})
+        acc = cluster_acc(np.argmax(cluster_prec, axis=1), Y)
+        print('acc_p_c_z: ', acc[0])
+        acc_tensor = tf.constant(acc[0], name='acc_p_c_z')
+        summary = tf.summary.scalar('acc_p_c_z', acc_tensor)
+        acc_summary = sess.run(summary)
+        writer.add_summary(acc_summary)
