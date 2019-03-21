@@ -289,7 +289,10 @@ theta_p,u_p,lambda_p = gmmpara_init()
 x, encoder_layers, z_mean, z_log_var, z, tempGamma, decoder_layers, x_decoded_mean = resolve_variational_autoencoder(data, original_dim, intermediate_dim, latent_dim, datatype)
 
 loss, latent_loss_scalar, recon_loss_scalar, loss_scalar = vae_loss(x, x_decoded_mean)
-merged_summary_op = tf.summary.merge_all()
+acc_tensor = tf.placeholder(dtype=tf.float32, shape=(), name='acc')
+acc = tf.summary.scalar('acc_p_c_z', acc_tensor)
+merged_acc_op = tf.summary.merge([acc])
+merged_training_summary = tf.summary.merge([latent_loss_scalar, recon_loss_scalar, loss_scalar])
 
 global_step = tf.Variable(0, trainable=False)
 learning_rate = tf.math.maximum(tf.train.exponential_decay(lr_nn, global_step, 7000, 0.9), 0.0002)
@@ -302,6 +305,7 @@ n_batches = int(n_train / training_batch_size)
 modelDir = './'
 saver = tf.train.Saver()
 
+
 with tf.Session() as sess:
     sess.run(init_param)
     aidx = list(range(n_train))
@@ -312,7 +316,7 @@ with tf.Session() as sess:
         for j in range(n_batches):
             inp = X[aidx[ptr:ptr + training_batch_size], :]
             ptr += training_batch_size
-            _, _ce, _lr, summary = sess.run([optimizer, loss, learning_rate, merged_summary_op], feed_dict={data: inp, label: inp, batch_size: training_batch_size})
+            _, _ce, _lr, summary = sess.run([optimizer, loss, learning_rate, merged_training_summary], feed_dict={data: inp, label: inp, batch_size: training_batch_size})
 
             # acc = cluster_acc(tf.math.argmax(tempGamma, axis=1), Y[aidx[ptr:ptr + batch_size]])
             # acc = cluster_acc(np.argmax(cluster_prec, axis=1), Y[aidx[ptr:ptr + batch_size]])
@@ -321,9 +325,7 @@ with tf.Session() as sess:
         cluster_prec = sess.run(tempGamma, feed_dict={data: X, label: X, batch_size: n_train})
         acc = cluster_acc(np.argmax(cluster_prec, axis=1), Y)
         print('acc_p_c_z: ', acc[0])
-        acc_tensor = tf.constant(acc[0], name='acc_p_c_z')
-        summary = tf.summary.scalar('acc_p_c_z', acc_tensor)
-        acc_summary = sess.run(summary)
-        writer.add_summary(acc_summary)
+        acc_summary = sess.run(merged_acc_op, feed_dict={acc_tensor: acc[0]})
+        writer.add_summary(acc_summary, i)
     save_path = saver.save(sess, "./model/model.ckpt")
     print("Model saved in path: %s" % save_path)
