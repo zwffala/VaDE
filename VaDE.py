@@ -98,17 +98,14 @@ def config_init(dataset):
         return 561,120,6,0.002,0.00002,10,0.9,0.9,5,'linear'
         
 def gmmpara_init():
-    
-    theta_init=np.ones(n_centroid)/n_centroid
-    # u_init=np.zeros((latent_dim,n_centroid))
-    lambda_init=np.ones((latent_dim,n_centroid))
-    u_init = tf.random_normal(shape=(latent_dim, n_centroid), mean=0, stddev=1.0, dtype=tf.float32)
-    # lambda_init = tf.random_normal(shape=(latent_dim, n_centroid), mean=1, stddev=1.0, dtype=tf.float32)
 
-    theta_p = tf.Variable(theta_init, dtype=tf.float32, name="pi")
-    u_p = tf.Variable(u_init, dtype=tf.float32, name="u")
+    lambda_init = tf.abs(tf.truncated_normal(shape=(latent_dim, n_centroid), mean=1, stddev=0.5, dtype=tf.float32))
     lambda_p = tf.Variable(lambda_init, dtype=tf.float32, name="lambda")
 
+    theta_p = tf.Variable(tf.ones(shape=(n_centroid), dtype=tf.float32)*(1/n_centroid), name='pi')
+    u_p = tf.get_variable(name='u_p', shape=[latent_dim, n_centroid],
+                              initializer=tf.initializers.truncated_normal(mean=0, stddev=0.5),
+                              dtype=tf.float32)
     return theta_p,u_p,lambda_p
 
 
@@ -298,7 +295,8 @@ merged_acc_op = tf.summary.merge([acc])
 merged_training_summary = tf.summary.merge([latent_loss_scalar, recon_loss_scalar, loss_scalar])
 
 global_step = tf.Variable(0, trainable=False)
-learning_rate = tf.math.maximum(tf.train.exponential_decay(lr_nn, global_step, 7000, 0.9), 0.0002)
+# learning_rate = tf.math.maximum(tf.train.exponential_decay(lr_nn, global_step, 7000, 0.9), 0.0002)
+learning_rate = tf.train.exponential_decay(0.001, global_step, 2000, 0.9)
 optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, name='Adam_Optimizer').minimize(loss, global_step=global_step)
 init_param = tf.global_variables_initializer()
 
