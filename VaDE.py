@@ -100,8 +100,10 @@ def config_init(dataset):
 def gmmpara_init():
     
     theta_init=np.ones(n_centroid)/n_centroid
-    u_init=np.zeros((latent_dim,n_centroid))
+    # u_init=np.zeros((latent_dim,n_centroid))
     lambda_init=np.ones((latent_dim,n_centroid))
+    u_init = tf.random_normal(shape=(latent_dim, n_centroid), mean=0, stddev=1.0, dtype=tf.float32)
+    # lambda_init = tf.random_normal(shape=(latent_dim, n_centroid), mean=1, stddev=1.0, dtype=tf.float32)
 
     theta_p = tf.Variable(theta_init, dtype=tf.float32, name="pi")
     u_p = tf.Variable(u_init, dtype=tf.float32, name="u")
@@ -126,8 +128,8 @@ def get_gamma(tempz):
     temp_theta_tensor3 = tf.expand_dims(temp_theta_tensor3, 0)
     temp_theta_tensor3 = tf.tile(temp_theta_tensor3, [batch_size, 1, 1])
 
-    temp_p_c_z = tf.exp(tf.reduce_sum(tf.log(temp_theta_tensor3)-0.5*tf.log(2*math.pi*temp_lambda_tensor3)
-                                      -tf.square(temp_Z-temp_u_tensor3)/(2*temp_lambda_tensor3), axis=1))+1e-10
+    temp_p_c_z = tf.exp(tf.reduce_sum((tf.log(temp_theta_tensor3)-0.5*tf.log(2*math.pi*temp_lambda_tensor3)
+                                      -tf.square(temp_Z-temp_u_tensor3)/(2*temp_lambda_tensor3)), axis=1))+1e-10
     return temp_p_c_z/tf.reduce_sum(temp_p_c_z, axis=-1, keepdims=True)
 
 
@@ -284,8 +286,9 @@ X,Y = load_data(dataset)
 original_dim,epoch,n_centroid,lr_nn,lr_gmm,decay_n,decay_nn,decay_gmm,alpha,datatype = config_init(dataset)
 data = tf.placeholder(tf.float32, shape=(None, original_dim), name='data')
 label = tf.placeholder(tf.float32, shape=(None, original_dim), name='label')
-theta_p,u_p,lambda_p = gmmpara_init()
 
+
+theta_p,u_p,lambda_p = gmmpara_init()
 x, encoder_layers, z_mean, z_log_var, z, tempGamma, decoder_layers, x_decoded_mean = resolve_variational_autoencoder(data, original_dim, intermediate_dim, latent_dim, datatype)
 
 loss, latent_loss_scalar, recon_loss_scalar, loss_scalar = vae_loss(x, x_decoded_mean)
@@ -316,13 +319,10 @@ with tf.Session() as sess:
         for j in range(n_batches):
             inp = X[aidx[ptr:ptr + training_batch_size], :]
             ptr += training_batch_size
-            _, _ce, _lr, summary = sess.run([optimizer, loss, learning_rate, merged_training_summary], feed_dict={data: inp, label: inp, batch_size: training_batch_size})
-
-            # acc = cluster_acc(tf.math.argmax(tempGamma, axis=1), Y[aidx[ptr:ptr + batch_size]])
-            # acc = cluster_acc(np.argmax(cluster_prec, axis=1), Y[aidx[ptr:ptr + batch_size]])
+            _, _ce, _lr, summary, gammaFromBatch, zFromBatch = sess.run([optimizer, loss, learning_rate, merged_training_summary, tempGamma, z], feed_dict={data: inp, label: inp, batch_size: training_batch_size})
             progress(j + 1, n_batches, status=' Loss=%f, Lr=%f, Epoch=%d/%d' % (_ce, _lr, i + 1, epoch))
             writer.add_summary(summary, i*n_batches+j)
-        cluster_prec = sess.run(tempGamma, feed_dict={data: X, label: X, batch_size: n_train})
+        cluster_prec, theta_p_epoch = sess.run([tempGamma, theta_p], feed_dict={data: X, batch_size: n_train})
         acc = cluster_acc(np.argmax(cluster_prec, axis=1), Y)
         print('acc_p_c_z: ', acc[0])
         acc_summary = sess.run(merged_acc_op, feed_dict={acc_tensor: acc[0]})
