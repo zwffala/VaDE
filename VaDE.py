@@ -23,6 +23,8 @@ import math
 import tensorflow as tf
 import sys
 
+from sklearn import mixture
+
 import os
 
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
@@ -100,7 +102,8 @@ def config_init(dataset):
 def gmmpara_init():
 
     lambda_init = tf.abs(tf.truncated_normal(shape=(latent_dim, n_centroid), mean=1, stddev=0.5, dtype=tf.float32))
-    lambda_p = tf.Variable(lambda_init, dtype=tf.float32, name="lambda")
+    #lambda_p = tf.Variable(lambda_init, dtype=tf.float32, name="lambda_p")
+    lambda_p = tf.get_variable(name='lambda', dtype=tf.float32, initializer=lambda_init, trainable=True)
 
     theta_p = tf.Variable(tf.ones(shape=(n_centroid), dtype=tf.float32)*(1/n_centroid), name='pi')
     u_p = tf.get_variable(name='u_p', shape=[latent_dim, n_centroid],
@@ -303,14 +306,34 @@ init_param = tf.global_variables_initializer()
 n_train = 70000
 training_batch_size = 100
 n_batches = int(n_train / training_batch_size)
-modelDir = './'
+summaryDir = './'
 saver = tf.train.Saver()
+
+pretrain = True
+modelDir = './model/model.ckpt'
+
+
+def reinitialzeGMMVariables(sample):
+    g = mixture.GaussianMixture(n_components=n_centroid, covariance_type='diag')
+    g.fit(sample)
+    u_p.assign(g.means_.T)
+    lambda_p.assign(g.covariances_.T)
+    print('lambda_p: ', g.covariances_.T[:2])
+    return u_p, lambda_p
 
 
 with tf.Session() as sess:
     sess.run(init_param)
+    if pretrain:
+        #from tensorflow.python.tools import inspect_checkpoint as chkp
+        #chkp.print_tensors_in_checkpoint_file(modelDir, tensor_name='', all_tensors=True)
+        saver.restore(sess, modelDir)
+        sample = sess.run(z_mean, feed_dict={data: X, batch_size: n_train})
+        reinitialzeGMMVariables(sample)
+        print('lambda_p.shape: ', lambda_p.shape)
+        # lambda_p_out = sess.run([lambda_p], feed_dict={sample: sample})
     aidx = list(range(n_train))
-    writer = tf.summary.FileWriter(modelDir, sess.graph)
+    writer = tf.summary.FileWriter(summaryDir, sess.graph)
     for i in range(epoch):
         random.shuffle(aidx)
         ptr = 0
