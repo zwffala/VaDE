@@ -316,10 +316,9 @@ modelDir = './model/model.ckpt'
 def reinitialzeGMMVariables(sample):
     g = mixture.GaussianMixture(n_components=n_centroid, covariance_type='diag')
     g.fit(sample)
-    u_p.assign(g.means_.T)
-    lambda_p.assign(g.covariances_.T)
-    print('lambda_p: ', g.covariances_.T[:2])
-    return u_p, lambda_p
+    up_assign_op = u_p.assign(g.means_.T)
+    lambda_assign_op = lambda_p.assign(g.covariances_.T)
+    return up_assign_op, lambda_assign_op
 
 
 with tf.Session() as sess:
@@ -328,10 +327,13 @@ with tf.Session() as sess:
         #from tensorflow.python.tools import inspect_checkpoint as chkp
         #chkp.print_tensors_in_checkpoint_file(modelDir, tensor_name='', all_tensors=True)
         saver.restore(sess, modelDir)
-        sample = sess.run(z_mean, feed_dict={data: X, batch_size: n_train})
-        reinitialzeGMMVariables(sample)
-        print('lambda_p.shape: ', lambda_p.shape)
-        # lambda_p_out = sess.run([lambda_p], feed_dict={sample: sample})
+        print('up after restore: ', u_p.eval(sess))
+        sample, _global_step = sess.run([z_mean, global_step.assign(0)], feed_dict={data: X, batch_size: n_train})
+        print('sample.shape: ', sample.shape)
+        print('sample: ', sample[:3])
+        up_assign_op, lambda_assign_op = reinitialzeGMMVariables(sample)
+        sess.run([up_assign_op, lambda_assign_op])
+        print('up after reinitial: ', u_p.eval(sess))
     aidx = list(range(n_train))
     writer = tf.summary.FileWriter(summaryDir, sess.graph)
     for i in range(epoch):
