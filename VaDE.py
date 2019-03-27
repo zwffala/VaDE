@@ -44,14 +44,14 @@ def progress(count, total, status=''):
 
 
 def cluster_acc(Y_pred, Y):
-  from sklearn.utils.linear_assignment_ import linear_assignment
-  assert Y_pred.size == Y.size
-  D = max(Y_pred.max(), Y.max())+1
-  w = np.zeros((D,D), dtype=np.int64)
-  for i in range(Y_pred.size):
-    w[Y_pred[i], Y[i]] += 1
-  ind = linear_assignment(w.max() - w)
-  return sum([w[i,j] for i,j in ind])*1.0/Y_pred.size, w
+    from sklearn.utils.linear_assignment_ import linear_assignment
+    assert Y_pred.size == Y.size
+    D = max(Y_pred.max(), Y.max())+1
+    w = np.zeros((D,D), dtype=np.int64)
+    for i in range(Y_pred.size):
+        w[Y_pred[i], Y[i]] += 1
+    ind = linear_assignment(w.max() - w)
+    return sum([w[i,j] for i,j in ind])*1.0/Y_pred.size, w
 
 
 def load_data(dataset):
@@ -101,14 +101,15 @@ def config_init(dataset):
         
 def gmmpara_init():
 
-    lambda_init = tf.abs(tf.truncated_normal(shape=(latent_dim, n_centroid), mean=1, stddev=0.5, dtype=tf.float32))
-    #lambda_p = tf.Variable(lambda_init, dtype=tf.float32, name="lambda_p")
-    lambda_p = tf.get_variable(name='lambda', dtype=tf.float32, initializer=lambda_init, trainable=True)
+    #lambda_init = tf.abs(tf.truncated_normal(shape=(latent_dim, n_centroid), mean=1, stddev=0.5, dtype=tf.float32))
+
+    lambda_p = tf.get_variable(name='lambda', shape=(latent_dim, n_centroid), dtype=tf.float32, initializer=tf.initializers.ones, trainable=True)
 
     theta_p = tf.Variable(tf.ones(shape=(n_centroid), dtype=tf.float32)*(1/n_centroid), name='pi')
-    u_p = tf.get_variable(name='u_p', shape=[latent_dim, n_centroid],
-                              initializer=tf.initializers.truncated_normal(mean=0, stddev=0.5),
-                              dtype=tf.float32)
+    # u_p = tf.get_variable(name='u_p', shape=[latent_dim, n_centroid],
+    #                           initializer=tf.initializers.truncated_normal(mean=0, stddev=0.5),
+    #                           dtype=tf.float32)
+    u_p = tf.get_variable(name='u_p', shape=(latent_dim, n_centroid), dtype=tf.float32, initializer=tf.initializers.zeros, trainable=True)
     return theta_p,u_p,lambda_p
 
 
@@ -276,7 +277,6 @@ db = sys.argv[1]
 if db in ['mnist','reuters10k','har']:
     dataset = db
 print ('training on: ' + dataset)
-ispretrain = False
 # batch_size = 100
 batch_size = tf.placeholder(dtype=tf.int32, shape=(), name='batch_size')
 latent_dim = 10
@@ -304,12 +304,12 @@ optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, name='Adam_Optim
 init_param = tf.global_variables_initializer()
 
 n_train = 70000
-training_batch_size = 100
+training_batch_size = 256
 n_batches = int(n_train / training_batch_size)
 summaryDir = './'
 saver = tf.train.Saver()
 
-pretrain = True
+pretrain = False
 modelDir = './model/model.ckpt'
 
 
@@ -328,24 +328,39 @@ with tf.Session() as sess:
         #chkp.print_tensors_in_checkpoint_file(modelDir, tensor_name='', all_tensors=True)
         saver.restore(sess, modelDir)
         print('up after restore: ', u_p.eval(sess))
-        sample, _global_step = sess.run([z_mean, global_step.assign(0)], feed_dict={data: X, batch_size: n_train})
+        #sample, _global_step = sess.run([z_mean, global_step.assign(0)], feed_dict={data: X, batch_size: n_train})
+        sample = sess.run(z_mean, feed_dict={data: X, batch_size: n_train})
         print('sample.shape: ', sample.shape)
         print('sample: ', sample[:3])
         up_assign_op, lambda_assign_op = reinitialzeGMMVariables(sample)
-        sess.run([up_assign_op, lambda_assign_op])
+        sess.run([up_assign_op, lambda_assign_op, global_step.assign(0)])
         print('up after reinitial: ', u_p.eval(sess))
+        print('lambda_p after reinitial: ', lambda_p.eval(sess))
+        g = mixture.GaussianMixture(n_components=n_centroid, covariance_type='diag')
+        g.fit(sample)
+        p = g.predict(sample)
+        acc_g = cluster_acc(p, Y)
+        print('acc_g: ', acc_g[0])
     aidx = list(range(n_train))
     writer = tf.summary.FileWriter(summaryDir, sess.graph)
     for i in range(epoch):
         random.shuffle(aidx)
         ptr = 0
+        if i == 0:
+            # initialize u_p with training scope GMM
+            sample = sess.run(z_mean, feed_dict={data: X, batch_size: n_train})
+            g = mixture.GaussianMixture(n_components=n_centroid, covariance_type='diag')
+            g.fit(sample)
+            up_assign_op = u_p.assign(g.means_.T)
+            sess.run(up_assign_op)
+            print('u_p after initializaition: ', u_p.eval(sess))
         for j in range(n_batches):
             inp = X[aidx[ptr:ptr + training_batch_size], :]
             ptr += training_batch_size
-            _, _ce, _lr, summary, gammaFromBatch, zFromBatch = sess.run([optimizer, loss, learning_rate, merged_training_summary, tempGamma, z], feed_dict={data: inp, label: inp, batch_size: training_batch_size})
+            _, _ce, _lr, summary = sess.run([optimizer, loss, learning_rate, merged_training_summary], feed_dict={data: inp, label: inp, batch_size: training_batch_size})
             progress(j + 1, n_batches, status=' Loss=%f, Lr=%f, Epoch=%d/%d' % (_ce, _lr, i + 1, epoch))
             writer.add_summary(summary, i*n_batches+j)
-        cluster_prec, theta_p_epoch = sess.run([tempGamma, theta_p], feed_dict={data: X, batch_size: n_train})
+        cluster_prec = sess.run(tempGamma, feed_dict={data: X, batch_size: n_train})
         acc = cluster_acc(np.argmax(cluster_prec, axis=1), Y)
         print('acc_p_c_z: ', acc[0])
         acc_summary = sess.run(merged_acc_op, feed_dict={acc_tensor: acc[0]})
