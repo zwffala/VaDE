@@ -326,13 +326,13 @@ merged_training_summary = tf.summary.merge([latent_loss_scalar, recon_loss_scala
 
 global_step = tf.Variable(0, trainable=False)
 # learning_rate = tf.math.maximum(tf.train.exponential_decay(lr_nn, global_step, 7000, 0.9), 0.0002)
-learning_rate = tf.train.exponential_decay(0.001, global_step, 2000, 0.9)
+learning_rate = tf.train.exponential_decay(0.002, global_step, 2000, 0.9)
 optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, name='Adam_Optimizer').minimize(loss,
                                                                                                 global_step=global_step)
 init_param = tf.global_variables_initializer()
 
 n_train = 70000
-training_batch_size = 256
+training_batch_size = 512
 n_batches = int(n_train / training_batch_size)
 summaryDir = './'
 saver = tf.train.Saver()
@@ -340,10 +340,11 @@ saver = tf.train.Saver()
 pretrain = False
 modelDir = './model/model.ckpt'
 
-gmmInitialStartEpoch = 100
-gmmInitialEndEpoch = 103
+gmmInitialStartEpoch = 1
+gmmInitialEndEpoch = 3
 means = []
 covariances = []
+enableGmmBoosting = True
 
 def gmmCollectingMeansAndCovariances(sample):
     g = mixture.GaussianMixture(n_components=n_centroid, covariance_type='diag')
@@ -385,7 +386,7 @@ with tf.Session() as sess:
         random.shuffle(aidx)
         ptr = 0
         # perform gmm boosting
-        if i == gmmInitialEndEpoch:
+        if i == gmmInitialEndEpoch and enableGmmBoosting:
             meanPrev = np.zeros(shape=means[0].shape)
             for _, item in enumerate(means):
                 meanCurrent = item
