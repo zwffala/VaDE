@@ -94,7 +94,7 @@ def load_data(dataset):
 
 def config_init(dataset):
     if dataset == 'mnist':
-        return 784, 1000, 10, 0.002, 0.002, 10, 0.9, 0.9, 1, 'sigmoid'
+        return 784, 700, 10, 0.002, 0.002, 10, 0.9, 0.9, 1, 'sigmoid'
     if dataset == 'reuters10k':
         return 2000, 15, 4, 0.002, 0.002, 5, 0.5, 0.5, 1, 'linear'
     if dataset == 'har':
@@ -326,14 +326,14 @@ merged_acc_op = tf.summary.merge([acc])
 merged_training_summary = tf.summary.merge([latent_loss_scalar, recon_loss_scalar, loss_scalar])
 
 global_step = tf.Variable(0, trainable=False)
-learning_rate = tf.math.maximum(tf.train.exponential_decay(lr_nn, global_step, 2000, 0.9), 0.0002)
+learning_rate = tf.math.maximum(tf.train.exponential_decay(lr_nn, global_step, 2000, 0.95), 0.0002)
 # learning_rate = tf.train.exponential_decay(0.002, global_step, 2000, 0.9)
 optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, name='Adam_Optimizer').minimize(loss,
                                                                                                 global_step=global_step)
 init_param = tf.global_variables_initializer()
 
 n_train = 70000
-training_batch_size = 1024
+training_batch_size = 512
 n_batches = int(n_train / training_batch_size)
 summaryDir = './'
 saver = tf.train.Saver()
@@ -341,7 +341,7 @@ saver = tf.train.Saver()
 pretrain = False
 modelDir = './model/model.ckpt'
 
-gmmEnsembleIntervalStep = 1500
+gmmEnsembleIntervalStep = 750
 gmmEnsembleStep = gmmEnsembleIntervalStep
 gmmEnsembleStopEpoch = epoch - 400
 enableGmmEnsemble = True
@@ -352,7 +352,8 @@ def reinitialzeGMMVariables(sample):
     g.fit(sample)
     up_assign_op = u_p.assign(g.means_.T)
     lambda_assign_op = lambda_p.assign(g.covariances_.T)
-    return up_assign_op, lambda_assign_op
+    theta_assign_op = theta_p.assign(g.weights_.T)
+    return up_assign_op, lambda_assign_op, theta_assign_op
 
 
 with tf.Session() as sess:
@@ -366,10 +367,11 @@ with tf.Session() as sess:
         sample = sess.run(z_mean, feed_dict={data: X, batch_size: n_train})
         print('sample.shape: ', sample.shape)
         print('sample: ', sample[:3])
-        up_assign_op, lambda_assign_op = reinitialzeGMMVariables(sample)
-        sess.run([up_assign_op, lambda_assign_op, global_step.assign(0)])
+        up_assign_op, lambda_assign_op, theta_assign_op = reinitialzeGMMVariables(sample)
+        sess.run([up_assign_op, lambda_assign_op, theta_assign_op, global_step.assign(0)])
         print('up after reinitial: ', u_p.eval(sess))
         print('lambda_p after reinitial: ', lambda_p.eval(sess))
+        print('theta_p after reinitial: ', theta_p.eval(sess))
         g = mixture.GaussianMixture(n_components=n_centroid, covariance_type='diag')
         g.fit(sample)
         p = g.predict(sample)
@@ -388,10 +390,11 @@ with tf.Session() as sess:
             if enableGmmEnsemble and global_step.eval(sess) == gmmEnsembleStep:
                 gmmEnsembleStep += gmmEnsembleIntervalStep
                 sample = sess.run(z_mean, feed_dict={data: inp, batch_size: training_batch_size})
-                up_assign_op, lambda_assign_op = reinitialzeGMMVariables(sample)
-                sess.run([up_assign_op, lambda_assign_op])
+                up_assign_op, lambda_assign_op, theta_assign_op = reinitialzeGMMVariables(sample)
+                sess.run([up_assign_op, lambda_assign_op, theta_assign_op])
                 print('up after reinitial: ', u_p.eval(sess))
                 print('lambda_p after reinitial: ', lambda_p.eval(sess))
+                print('theta_p after reinitial: ', theta_p.eval(sess))
                 continue
             _, _ce, _lr, summary = sess.run([optimizer, loss, learning_rate, merged_training_summary],
                                             feed_dict={data: inp, label: inp, batch_size: training_batch_size})
