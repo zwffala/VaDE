@@ -94,7 +94,7 @@ def load_data(dataset):
 
 def config_init(dataset):
     if dataset == 'mnist':
-        return 784, 700, 10, 0.002, 0.002, 10, 0.9, 0.9, 1, 'sigmoid'
+        return 784, 1500, 10, 0.002, 0.002, 10, 0.9, 0.9, 1, 'sigmoid'
     if dataset == 'reuters10k':
         return 2000, 15, 4, 0.002, 0.002, 5, 0.5, 0.5, 1, 'linear'
     if dataset == 'har':
@@ -344,8 +344,10 @@ modelDir = './model/model.ckpt'
 gmmEnsembleIntervalStep = 750
 gmmEnsembleStep = gmmEnsembleIntervalStep
 gmmEnsembleStopEpoch = epoch - 400
-enableGmmEnsemble = True
-
+enableGmmEnsemble = False
+gmmEnsembleBatchSize = 2048 * 2
+gmmEnsembleTimes = 2
+numGmmEnsembleTimes = 0
 
 def reinitialzeGMMVariables(sample):
     g = mixture.GaussianMixture(n_components=n_centroid, covariance_type='diag')
@@ -354,6 +356,25 @@ def reinitialzeGMMVariables(sample):
     lambda_assign_op = lambda_p.assign(g.covariances_.T)
     theta_assign_op = theta_p.assign(g.weights_.T)
     return up_assign_op, lambda_assign_op, theta_assign_op
+
+
+def isConverged(acc):
+    threshold = 0.01
+    isConverged.sum += (acc - isConverged.accPrev)
+    if math.fabs(isConverged.sum) < threshold:
+        isConverged.count += 1
+    else:
+        isConverged.count = 0
+        isConverged.sum = 0
+    isConverged.accPrev = acc
+    if isConverged.count > 150:
+        isConverged.count = 0
+        isConverged.sum = 0
+        return True
+    return False
+isConverged.count = 0
+isConverged.accPrev = 0
+isConverged.sum = 0
 
 
 with tf.Session() as sess:
@@ -387,14 +408,17 @@ with tf.Session() as sess:
         for j in range(n_batches):
             inp = X[aidx[ptr:ptr + training_batch_size], :]
             ptr += training_batch_size
-            if enableGmmEnsemble and global_step.eval(sess) == gmmEnsembleStep:
-                gmmEnsembleStep += gmmEnsembleIntervalStep
-                sample = sess.run(z_mean, feed_dict={data: inp, batch_size: training_batch_size})
+            if enableGmmEnsemble and numGmmEnsembleTimes < gmmEnsembleTimes: #and global_step.eval(sess) == gmmEnsembleStep:
+                # gmmEnsembleStep += gmmEnsembleIntervalStep
+                inp = X[aidx[0:gmmEnsembleBatchSize], :]
+                sample = sess.run(z_mean, feed_dict={data: inp, batch_size: gmmEnsembleBatchSize})
                 up_assign_op, lambda_assign_op, theta_assign_op = reinitialzeGMMVariables(sample)
-                sess.run([up_assign_op, lambda_assign_op, theta_assign_op])
+                sess.run([up_assign_op, lambda_assign_op])
                 print('up after reinitial: ', u_p.eval(sess))
                 print('lambda_p after reinitial: ', lambda_p.eval(sess))
-                print('theta_p after reinitial: ', theta_p.eval(sess))
+                # print('theta_p after reinitial: ', theta_p.eval(sess))
+                numGmmEnsembleTimes += 1
+                enableGmmEnsemble = False
                 continue
             _, _ce, _lr, summary = sess.run([optimizer, loss, learning_rate, merged_training_summary],
                                             feed_dict={data: inp, label: inp, batch_size: training_batch_size})
@@ -405,5 +429,7 @@ with tf.Session() as sess:
         print('acc_p_c_z: ', acc[0])
         acc_summary = sess.run(merged_acc_op, feed_dict={acc_tensor: acc[0]})
         writer.add_summary(acc_summary, i)
+        enableGmmEnsemble = isConverged(acc[0])
+        print('isConverged.sum: %f, isConverged.count: %d' % isConverged.sum, isConverged.count)
     save_path = saver.save(sess, "./model/model.ckpt")
     print("Model saved in path: %s" % save_path)
