@@ -94,7 +94,7 @@ def load_data(dataset):
 
 def config_init(dataset):
     if dataset == 'mnist':
-        return 784, 700, 10, 0.002, 0.002, 10, 0.9, 0.9, 1, 'sigmoid'
+        return 784, 300, 10, 0.002, 0.002, 10, 0.9, 0.9, 1, 'sigmoid'
     if dataset == 'reuters10k':
         return 2000, 15, 4, 0.002, 0.002, 5, 0.5, 0.5, 1, 'linear'
     if dataset == 'har':
@@ -132,11 +132,15 @@ def get_gamma(tempz):
     temp_theta_tensor3 = tf.expand_dims(temp_theta_tensor3, 0)
     temp_theta_tensor3 = tf.tile(temp_theta_tensor3, [batch_size, 1, 1])
 
-    temp_p_c_z = tf.exp(tf.reduce_sum((tf.log(temp_theta_tensor3) - 0.5 * tf.log(2 * math.pi * temp_lambda_tensor3)
-                                       - tf.square(temp_Z - temp_u_tensor3) / (2 * temp_lambda_tensor3)),
-                                      axis=1)) + 1e-10
-    return temp_p_c_z / tf.reduce_sum(temp_p_c_z, axis=-1, keepdims=True)
+    # temp_p_c_z = tf.exp(tf.reduce_sum((tf.log(temp_theta_tensor3) - 0.5 * tf.log(2 * math.pi * temp_lambda_tensor3)
+    #                                    - tf.square(temp_Z - temp_u_tensor3) / (2 * temp_lambda_tensor3)),
+    #                                   axis=1)) + 1e-10
+    # return temp_p_c_z / tf.reduce_sum(temp_p_c_z, axis=-1, keepdims=True)
 
+    temp_p_c_z = tf.reduce_sum((tf.log(temp_theta_tensor3) - 0.5 * tf.log(2 * math.pi * temp_lambda_tensor3)
+                                       - tf.square(temp_Z - temp_u_tensor3) / (2 * temp_lambda_tensor3)),
+                                      axis=1)
+    return tf.nn.softmax(temp_p_c_z, axis=-1)
 
 def vae_loss(x, x_decoded_mean):
     Z = tf.expand_dims(z, -1)  # z.shape(batch_size, latent)
@@ -159,10 +163,14 @@ def vae_loss(x, x_decoded_mean):
     theta_tensor3 = tf.expand_dims(theta_tensor3, 0)
     theta_tensor3 = tf.tile(theta_tensor3, [batch_size, 1, 1])
 
-    p_c_z = tf.exp(tf.reduce_sum(
-        tf.log(theta_tensor3) - 0.5 * tf.log(2 * math.pi * lambda_tensor3) - tf.square(Z - u_tensor3) / (
-                    2 * lambda_tensor3), axis=1)) + 1e-10  # p_c_z.shape(batch, K)
-    gamma = p_c_z / tf.reduce_sum(p_c_z, axis=-1, keepdims=True)
+    # p_c_z = tf.exp(tf.reduce_sum(
+    #     tf.log(theta_tensor3) - 0.5 * tf.log(2 * math.pi * lambda_tensor3) - tf.square(Z - u_tensor3) / (
+    #                 2 * lambda_tensor3), axis=1)) + 1e-10  # p_c_z.shape(batch, K)
+    # gamma = p_c_z / tf.reduce_sum(p_c_z, axis=-1, keepdims=True)
+    p_c_z = tf.reduce_sum((tf.log(theta_tensor3) - 0.5 * tf.log(2 * math.pi * lambda_tensor3)
+                                - tf.square(Z - u_tensor3) / (2 * lambda_tensor3)),
+                               axis=1)
+    gamma = tf.nn.softmax(p_c_z, axis=-1)
     gamma_t = tf.expand_dims(gamma, axis=1)
     gamma_t = tf.tile(gamma_t, [1, latent_dim, 1])  # gamma_t.shape(batch, latent, 1)
 
