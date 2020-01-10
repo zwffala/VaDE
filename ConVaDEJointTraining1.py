@@ -20,6 +20,7 @@ import sys
 from sklearn import mixture
 
 import os
+import json
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
@@ -132,7 +133,7 @@ def get_gamma(tempz):
     return temp_p_c_z / tf.reduce_sum(temp_p_c_z, axis=-1, keepdims=True)
 
 
-def vae_loss(x, x_decoded_mean):
+def vade_loss(x, x_decoded_mean):
     Z = tf.expand_dims(z, -1)  # z.shape(batch_size, latent)
     Z = tf.tile(Z, [1, 1, n_centroid])  # Z.shape(batch_size, latent, K)
 
@@ -181,66 +182,20 @@ def vae_loss(x, x_decoded_mean):
     _loss = _recon_loss + latent_loss
     _loss_scalar = tf.summary.scalar('loss', _loss)
 
+    _vae_latent_loss = -0.5*tf.reduce_sum(1+z_log_var-tf.square(z_mean)-tf.exp(z_log_var), axis=1)
+    _vae_latent_loss = tf.reduce_mean(_vae_latent_loss)
+    _vae_latent_loss_scalar = tf.summary.scalar('vae_latent_loss', _vae_latent_loss)
+
+    _vae_loss = _vae_latent_loss + _recon_loss
+
     # return _loss
-    return _recon_loss, _loss, _latent_loss_scalar, _recon_loss_scalar, _loss_scalar
+    return _recon_loss, _vae_loss, _loss, _latent_loss_scalar, _recon_loss_scalar, _loss_scalar, _vae_latent_loss_scalar
 
 '''
 A `Tensor` which represents input layer of a model. Its shape
     is (batch_size, first_layer_dimension) and its dtype is `float32`.
     first_layer_dimension is determined based on given `feature_columns`.
 '''
-def resolve_variational_autoencoder(data, original_dim, intermediate_dim, latent_dim, datatype, trainable=True):
-    # construct the encoder dense layers
-    # _input = tf.placeholder(shape=(None, original_dim), name='input', dtype=tf.float32)
-    print('data shape:', data.shape)
-    _input = data
-    result = _input
-    encoder_layers = []
-    for i in intermediate_dim:
-        _layer = tf.layers.Dense(units=i,
-                                 activation='relu',
-                                 trainable=trainable)
-
-        result = _layer.apply(result)
-        encoder_layers.append(_layer)
-
-    # bottleneck layer, i.e. features are extracted from here
-
-    mu_layer = tf.layers.Dense(units=latent_dim,
-                               trainable=trainable,
-                               activation=None)
-    encoder_layers.append(mu_layer)
-    z_mu = mu_layer.apply(result)
-
-    sigma_layer = tf.layers.Dense(units=latent_dim,
-                                  trainable=trainable,
-                                  activation=None)
-    encoder_layers.append(sigma_layer)
-    z_sigma = sigma_layer.apply(result)
-
-    eps = tf.random_normal(shape=tf.shape(z_sigma), mean=0, stddev=1, dtype=tf.float32)    # eps.shape(batch_size, latent)
-    z = z_mu + tf.exp(z_sigma/2) * eps  # z.shape(batch_size, latent)
-    result = z
-
-    gamma = get_gamma(z)
-
-    # construct the decoder dense layers
-    decoder_layers = []
-    for i in reversed(intermediate_dim):
-        _layer = tf.layers.Dense(units=i,
-                                 activation='elu',
-                                 trainable=trainable)
-        result = _layer.apply(result)
-        decoder_layers.append(_layer)
-
-    # construct the output layer
-    _layer = tf.layers.Dense(units=original_dim,
-                             trainable=trainable,
-                             activation=None)  # activation=(tf.nn.sigmoid if variational else None))
-    decoder_layers.append(_layer)
-    result = _layer.apply(result)
-
-    return _input, encoder_layers, z_mu, z_sigma, z, gamma, decoder_layers, result
 
 def resolve_convolutional_variational_autoencoder(data, latent_dim, trainable=True):
     input_shape = (tf.shape(data)[0], 28, 28, 1)
@@ -313,11 +268,11 @@ theta_p, u_p, lambda_p = gmmpara_init()
 x, z_mean, z_log_var, z, tempGamma, x_decoded_mean = resolve_convolutional_variational_autoencoder(data, latent_dim)
 #x, encoder_layers, z_mean, z_log_var, z, tempGamma, decoder_layers, x_decoded_mean = resolve_variational_autoencoder(data, original_dim, intermediate_dim, latent_dim, datatype)
 
-recon_loss, loss, latent_loss_scalar, recon_loss_scalar, loss_scalar = vae_loss(x, x_decoded_mean)
+recon_loss, vae_loss, loss, latent_loss_scalar, recon_loss_scalar, loss_scalar, vae_latent_loss_scalar = vade_loss(x, x_decoded_mean)
 acc_tensor = tf.placeholder(dtype=tf.float32, shape=(), name='acc')
 acc = tf.summary.scalar('acc_p_c_z', acc_tensor)
 merged_acc_op = tf.summary.merge([acc])
-merged_training_summary = tf.summary.merge([latent_loss_scalar, recon_loss_scalar, loss_scalar])
+merged_training_summary = tf.summary.merge([latent_loss_scalar, recon_loss_scalar, loss_scalar, vae_latent_loss_scalar])
 
 global_step = tf.Variable(0, trainable=False)
 # learning_rate = tf.math.maximum(tf.train.exponential_decay(lr_nn, global_step, 7000, 0.9), 0.0002)
@@ -325,6 +280,8 @@ learning_rate = tf.train.exponential_decay(0.002, global_step, 1000, 0.95)
 totalLossOptimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, name='Adam_Optimizer').minimize(loss,
                                                                                                 global_step=global_step)
 reconstructLossOptimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, name='Adam_Optimizer').minimize(recon_loss,
+                                                                                                global_step=global_step)
+vaeLossOptimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, name='Adam_Optimizer').minimize(vae_loss,
                                                                                                 global_step=global_step)
 init_param = tf.global_variables_initializer()
 
@@ -334,10 +291,13 @@ n_batches = int(n_train / training_batch_size)
 summaryDir = './'
 saver = tf.train.Saver()
 
-isTrained = False
+
+isTrained = True
 modelDir = './model/model.ckpt'
 
-pretrainEpochEnd = 200
+pretrainEpochEnd = 0
+
+predict = True
 
 
 def reinitialzeGMMVariables(sample):
@@ -377,14 +337,14 @@ with tf.Session() as sess:
             # initialize u_p, on training dataset
             sample = sess.run(z_mean, feed_dict={data: X, batch_size: n_train})
             up_assign_op, lambda_assign_op = reinitialzeGMMVariables(sample)
-            sess.run([up_assign_op, lambda_assign_op, global_step.assign(0)])
+            sess.run([up_assign_op, lambda_assign_op])
             print('up after reinitial: ', u_p.eval(sess))
             print('lambda_p after reinitial: ', lambda_p.eval(sess))
         for j in range(n_batches):
             inp = X[aidx[ptr:ptr + training_batch_size], :]
             ptr += training_batch_size
             if i < pretrainEpochEnd:
-                _, _ce, _lr, summary = sess.run([reconstructLossOptimizer, recon_loss, learning_rate, merged_training_summary],
+                _, _ce, _lr, summary = sess.run([vaeLossOptimizer, vae_loss, learning_rate, merged_training_summary],
                                                 feed_dict={data: inp, label: inp, batch_size: training_batch_size})
             else:
                 _, _ce, _lr, summary = sess.run([totalLossOptimizer, loss, learning_rate, merged_training_summary],
@@ -399,3 +359,20 @@ with tf.Session() as sess:
     print('theta_p: ', theta_p.eval(sess))
     save_path = saver.save(sess, "./model/model.ckpt")
     print("Model saved in path: %s" % save_path)
+    if predict:
+        predictFileName = 'predict.json'
+        print('predict results save to: ', predictFileName)
+        latent, cluster_prec_temp = sess.run([z, tempGamma], feed_dict={data: X, batch_size: n_train})
+        latent = latent.tolist()
+        cluster_prec = np.argmax(cluster_prec_temp, axis=1)
+        # write latent variable, predict cluster, and true cluster to json file
+        # {"index": 0, code": [], "predcit_cluster": 3, "label": 3}
+        with open(predictFileName, 'a') as f_write:
+            for i in range(n_train):
+                data = {}
+                data['index'] = i
+                data['code'] = latent[i]
+                data['predict_cluster'] = cluster_prec[i].item()
+                data['label'] = Y[i].item()
+                json.dump(data, f_write)
+                f_write.write('\n')

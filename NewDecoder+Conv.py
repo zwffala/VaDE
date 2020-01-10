@@ -221,63 +221,8 @@ def vae_loss(x, x_decoded_mean):
 #         epochBegin(epoch)
 
 '''
-A `Tensor` which represents input layer of a model. Its shape
-    is (batch_size, first_layer_dimension) and its dtype is `float32`.
-    first_layer_dimension is determined based on given `feature_columns`.
+In decoding,  add mu_x and sigma_x, compute x’ through those
 '''
-def resolve_variational_autoencoder(data, original_dim, intermediate_dim, latent_dim, datatype, trainable=True):
-    # construct the encoder dense layers
-    # _input = tf.placeholder(shape=(None, original_dim), name='input', dtype=tf.float32)
-    print('data shape:', data.shape)
-    _input = data
-    result = _input
-    encoder_layers = []
-    for i in intermediate_dim:
-        _layer = tf.layers.Dense(units=i,
-                                 activation='relu',
-                                 trainable=trainable)
-
-        result = _layer.apply(result)
-        encoder_layers.append(_layer)
-
-    # bottleneck layer, i.e. features are extracted from here
-
-    mu_layer = tf.layers.Dense(units=latent_dim,
-                               trainable=trainable,
-                               activation=None)
-    encoder_layers.append(mu_layer)
-    z_mu = mu_layer.apply(result)
-
-    sigma_layer = tf.layers.Dense(units=latent_dim,
-                                  trainable=trainable,
-                                  activation=None)
-    encoder_layers.append(sigma_layer)
-    z_sigma = sigma_layer.apply(result)
-
-    eps = tf.random_normal(shape=tf.shape(z_sigma), mean=0, stddev=1, dtype=tf.float32)    # eps.shape(batch_size, latent)
-    z = z_mu + tf.exp(z_sigma/2) * eps  # z.shape(batch_size, latent)
-    result = z
-
-    gamma = get_gamma(z)
-
-    # construct the decoder dense layers
-    decoder_layers = []
-    for i in reversed(intermediate_dim):
-        _layer = tf.layers.Dense(units=i,
-                                 activation='elu',
-                                 trainable=trainable)
-        result = _layer.apply(result)
-        decoder_layers.append(_layer)
-
-    # construct the output layer
-    _layer = tf.layers.Dense(units=original_dim,
-                             trainable=trainable,
-                             activation=None)  # activation=(tf.nn.sigmoid if variational else None))
-    decoder_layers.append(_layer)
-    result = _layer.apply(result)
-
-    return _input, encoder_layers, z_mu, z_sigma, z, gamma, decoder_layers, result
-
 def resolve_convolutional_variational_autoencoder(data, latent_dim, trainable=True):
     input_shape = (tf.shape(data)[0], 28, 28, 1)
     _input = tf.reshape(data, input_shape)
@@ -287,13 +232,11 @@ def resolve_convolutional_variational_autoencoder(data, latent_dim, trainable=Tr
     with tf.name_scope("convolution_encoder"):
         cae_encoder = tf.layers.conv2d(_input, filters[0], 5, strides=(2, 2),
                                        padding='same', activation=tf.nn.relu)
-        print('cnn1: ', cae_encoder)
+
         cae_encoder = tf.layers.conv2d(cae_encoder, filters[1], 5, strides=(2, 2),
                                        padding='same', activation=tf.nn.relu)
-        print('cnn2: ', cae_encoder)
         cae_encoder = tf.layers.conv2d(cae_encoder, filters[2], 3, strides=(2, 2),
                                        padding='valid', activation=tf.nn.relu)
-        print('cnn3: ', cae_encoder)
     dim_before_flatten = tf.shape(cae_encoder)
     print('dim_before_flatten: ', dim_before_flatten)
     cae_encoder = tf.layers.Flatten()(cae_encoder)
@@ -323,14 +266,23 @@ def resolve_convolutional_variational_autoencoder(data, latent_dim, trainable=Tr
         print('cae_decoder1: ', cae_decoder)
         cae_decoder = tf.layers.Conv2DTranspose(filters[1], 3, strides=(2, 2),
                                                 padding='valid', activation=tf.nn.relu)(cae_decoder)
-        print('cae_decoder2: ', cae_decoder)
         cae_decoder = tf.layers.Conv2DTranspose(filters[0], 5, strides=(2, 2),
                                                 padding='same', activation=tf.nn.relu)(cae_decoder)
-        print('cae_decoder3: ', cae_decoder)
         cae_decoder = tf.layers.Conv2DTranspose(input_shape[-1], 5, strides=(2, 2),
                                                 padding='same', activation=None)(cae_decoder)
-        print('cae_decoder4: ', cae_decoder)
-    output = tf.reshape(cae_decoder, shape=tf.shape(data))
+        print('cae_decoder2: ', cae_decoder)
+        cae_decoder = tf.layers.Flatten()(cae_decoder)
+
+        output_mu_layer = tf.layers.Dense(units=28*28*1, trainable=trainable, activation=None, name='output_mu')
+        mu_x = output_mu_layer.apply(cae_decoder)
+
+        output_sigma_layer = tf.layers.Dense(units=28*28*1, trainable=trainable, activation=None, name='output_sigma')
+        sigma_x = output_sigma_layer.apply(cae_decoder)
+
+        eps_x = tf.random_normal(shape=tf.shape(28*28*1), mean=0, stddev=1, dtype=tf.float32)
+        output = mu_x + tf.exp(sigma_x/2)*eps_x
+
+    output = tf.reshape(output, shape=tf.shape(data))
 
     return data, z_mu, z_sigma, z, gamma, output
 
@@ -425,7 +377,6 @@ with tf.Session() as sess:
             progress(j + 1, n_batches, status=' Loss=%f, Lr=%f, Epoch=%d/%d' % (_ce, _lr, i + 1, epoch))
             writer.add_summary(summary, i * n_batches + j)
         cluster_prec = sess.run(tempGamma, feed_dict={data: X, batch_size: n_train})
-        print('cluster_prec', cluster_prec)
         acc = cluster_acc(np.argmax(cluster_prec, axis=1), Y)
         print('acc_p_c_z: ', acc[0])
         acc_summary = sess.run(merged_acc_op, feed_dict={acc_tensor: acc[0]})

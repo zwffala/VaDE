@@ -89,7 +89,7 @@ def load_data(dataset):
         X = X[:10200]
         Y = Y[:10200]
 
-    return X, Y
+    return X, Y, len(X)
 
 
 def config_init(dataset):
@@ -225,79 +225,27 @@ A `Tensor` which represents input layer of a model. Its shape
     is (batch_size, first_layer_dimension) and its dtype is `float32`.
     first_layer_dimension is determined based on given `feature_columns`.
 '''
-def resolve_variational_autoencoder(data, original_dim, intermediate_dim, latent_dim, datatype, trainable=True):
-    # construct the encoder dense layers
-    # _input = tf.placeholder(shape=(None, original_dim), name='input', dtype=tf.float32)
-    print('data shape:', data.shape)
-    _input = data
-    result = _input
-    encoder_layers = []
-    for i in intermediate_dim:
-        _layer = tf.layers.Dense(units=i,
-                                 activation='relu',
-                                 trainable=trainable)
-
-        result = _layer.apply(result)
-        encoder_layers.append(_layer)
-
-    # bottleneck layer, i.e. features are extracted from here
-
-    mu_layer = tf.layers.Dense(units=latent_dim,
-                               trainable=trainable,
-                               activation=None)
-    encoder_layers.append(mu_layer)
-    z_mu = mu_layer.apply(result)
-
-    sigma_layer = tf.layers.Dense(units=latent_dim,
-                                  trainable=trainable,
-                                  activation=None)
-    encoder_layers.append(sigma_layer)
-    z_sigma = sigma_layer.apply(result)
-
-    eps = tf.random_normal(shape=tf.shape(z_sigma), mean=0, stddev=1, dtype=tf.float32)    # eps.shape(batch_size, latent)
-    z = z_mu + tf.exp(z_sigma/2) * eps  # z.shape(batch_size, latent)
-    result = z
-
-    gamma = get_gamma(z)
-
-    # construct the decoder dense layers
-    decoder_layers = []
-    for i in reversed(intermediate_dim):
-        _layer = tf.layers.Dense(units=i,
-                                 activation='elu',
-                                 trainable=trainable)
-        result = _layer.apply(result)
-        decoder_layers.append(_layer)
-
-    # construct the output layer
-    _layer = tf.layers.Dense(units=original_dim,
-                             trainable=trainable,
-                             activation=None)  # activation=(tf.nn.sigmoid if variational else None))
-    decoder_layers.append(_layer)
-    result = _layer.apply(result)
-
-    return _input, encoder_layers, z_mu, z_sigma, z, gamma, decoder_layers, result
 
 def resolve_convolutional_variational_autoencoder(data, latent_dim, trainable=True):
-    input_shape = (tf.shape(data)[0], 28, 28, 1)
-    _input = tf.reshape(data, input_shape)
+    paddings = tf.constant([[0, 0], [0, 25]])
+    paddedData = tf.pad(data, paddings, 'CONSTANT')
+    input_shape = (tf.shape(paddedData)[0], 45, 45, 1)
+    _input = tf.reshape(paddedData, input_shape)
 
     filters = [32, 64, 128, latent_dim]
 
     with tf.name_scope("convolution_encoder"):
         cae_encoder = tf.layers.conv2d(_input, filters[0], 5, strides=(2, 2),
-                                       padding='same', activation=tf.nn.relu)
-        print('cnn1: ', cae_encoder)
+                                       padding='valid', activation=tf.nn.relu)
+
         cae_encoder = tf.layers.conv2d(cae_encoder, filters[1], 5, strides=(2, 2),
-                                       padding='same', activation=tf.nn.relu)
-        print('cnn2: ', cae_encoder)
+                                       padding='valid', activation=tf.nn.relu)
         cae_encoder = tf.layers.conv2d(cae_encoder, filters[2], 3, strides=(2, 2),
                                        padding='valid', activation=tf.nn.relu)
-        print('cnn3: ', cae_encoder)
     dim_before_flatten = tf.shape(cae_encoder)
-    print('dim_before_flatten: ', dim_before_flatten)
     cae_encoder = tf.layers.Flatten()(cae_encoder)
-    flatten_dim = filters[2] * int(input_shape[1] / 8) * int(input_shape[1] / 8)
+    #flatten_dim = filters[2] * int(input_shape[1] / 8) * int(input_shape[1] / 8)
+    flatten_dim = 4 * 4 * 128
 
     mu_layer = tf.layers.Dense(units=latent_dim,
                                trainable=trainable,
@@ -323,16 +271,14 @@ def resolve_convolutional_variational_autoencoder(data, latent_dim, trainable=Tr
         print('cae_decoder1: ', cae_decoder)
         cae_decoder = tf.layers.Conv2DTranspose(filters[1], 3, strides=(2, 2),
                                                 padding='valid', activation=tf.nn.relu)(cae_decoder)
-        print('cae_decoder2: ', cae_decoder)
         cae_decoder = tf.layers.Conv2DTranspose(filters[0], 5, strides=(2, 2),
-                                                padding='same', activation=tf.nn.relu)(cae_decoder)
-        print('cae_decoder3: ', cae_decoder)
+                                                padding='valid', activation=tf.nn.relu)(cae_decoder)
         cae_decoder = tf.layers.Conv2DTranspose(input_shape[-1], 5, strides=(2, 2),
-                                                padding='same', activation=None)(cae_decoder)
-        print('cae_decoder4: ', cae_decoder)
-    output = tf.reshape(cae_decoder, shape=tf.shape(data))
+                                                padding='valid', activation=tf.nn.relu)(cae_decoder)
+        print('cae_decoder2: ', cae_decoder)
+    output = tf.reshape(cae_decoder, shape=tf.shape(paddedData))
 
-    return data, z_mu, z_sigma, z, gamma, output
+    return paddedData, z_mu, z_sigma, z, gamma, output
 
 
 dataset = 'mnist'
@@ -341,11 +287,11 @@ if db in ['mnist', 'reuters10k', 'har']:
     dataset = db
 print('training on: ' + dataset)
 batch_size = tf.placeholder(dtype=tf.int32, shape=(), name='batch_size')
-latent_dim = 10
 intermediate_dim = [500, 500, 2000]
 accuracy = []
-X, Y = load_data(dataset)
+X, Y, n_train = load_data(dataset)
 original_dim, epoch, n_centroid, lr_nn, lr_gmm, decay_n, decay_nn, decay_gmm, alpha, datatype = config_init(dataset)
+latent_dim = 10
 data = tf.placeholder(tf.float32, shape=(None, original_dim), name='data')
 label = tf.placeholder(tf.float32, shape=(None, original_dim), name='label')
 
@@ -366,7 +312,7 @@ optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, name='Adam_Optim
                                                                                                 global_step=global_step)
 init_param = tf.global_variables_initializer()
 
-n_train = 70000
+# n_train = 70000
 training_batch_size = 1024
 n_batches = int(n_train / training_batch_size)
 summaryDir = './'
@@ -425,7 +371,6 @@ with tf.Session() as sess:
             progress(j + 1, n_batches, status=' Loss=%f, Lr=%f, Epoch=%d/%d' % (_ce, _lr, i + 1, epoch))
             writer.add_summary(summary, i * n_batches + j)
         cluster_prec = sess.run(tempGamma, feed_dict={data: X, batch_size: n_train})
-        print('cluster_prec', cluster_prec)
         acc = cluster_acc(np.argmax(cluster_prec, axis=1), Y)
         print('acc_p_c_z: ', acc[0])
         acc_summary = sess.run(merged_acc_op, feed_dict={acc_tensor: acc[0]})

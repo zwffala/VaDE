@@ -26,6 +26,7 @@ import sys
 from sklearn import mixture
 
 import os
+import utility
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
@@ -166,7 +167,7 @@ def vae_loss(x, x_decoded_mean):
     gamma_t = tf.expand_dims(gamma, axis=1)
     gamma_t = tf.tile(gamma_t, [1, latent_dim, 1])  # gamma_t.shape(batch, latent, 1)
 
-    latent_loss = tf.reduce_sum(0.5 * gamma_t * (latent_dim * tf.log(math.pi * 2) + tf.log(lambda_tensor3)
+    latent_loss = tf.reduce_sum(0.5 * gamma_t * (latent_dim * tf.log(math.pi * 2) + tf.log(lambda_tensor3 + 1e-10)
                                                  + tf.exp(Z_log_var_t) / lambda_tensor3 + tf.square(
                 Z_mean_t - u_tensor3) / lambda_tensor3), axis=(1, 2)) \
                   - 0.5 * tf.reduce_sum(z_log_var + 1, axis=-1) \
@@ -326,7 +327,7 @@ merged_acc_op = tf.summary.merge([acc])
 merged_training_summary = tf.summary.merge([latent_loss_scalar, recon_loss_scalar, loss_scalar])
 
 global_step = tf.Variable(0, trainable=False)
-learning_rate = tf.math.maximum(tf.train.exponential_decay(lr_nn, global_step, 2000, 0.95), 0.0002)
+learning_rate = tf.math.maximum(tf.train.exponential_decay(lr_nn, global_step, 2000, 0.95), 0.0001)
 # learning_rate = tf.train.exponential_decay(0.002, global_step, 2000, 0.9)
 optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, name='Adam_Optimizer').minimize(loss,
                                                                                                 global_step=global_step)
@@ -345,8 +346,8 @@ gmmEnsembleIntervalStep = 750
 gmmEnsembleStep = gmmEnsembleIntervalStep
 gmmEnsembleStopEpoch = epoch - 400
 enableGmmEnsemble = False
-gmmEnsembleBatchSize = 2048 * 2
-gmmEnsembleTimes = 2
+gmmEnsembleBatchSize = n_train
+gmmEnsembleTimes = 1
 numGmmEnsembleTimes = 0
 
 def reinitialzeGMMVariables(sample):
@@ -355,7 +356,7 @@ def reinitialzeGMMVariables(sample):
     up_assign_op = u_p.assign(g.means_.T)
     lambda_assign_op = lambda_p.assign(g.covariances_.T)
     theta_assign_op = theta_p.assign(g.weights_.T)
-    return up_assign_op, lambda_assign_op, theta_assign_op
+    return up_assign_op, lambda_assign_op, theta_assign_op, g.means_.T, g.covariances_.T
 
 
 def isConverged(acc):
@@ -367,7 +368,7 @@ def isConverged(acc):
         isConverged.count = 0
         isConverged.sum = 0
     isConverged.accPrev = acc
-    if isConverged.count > 150:
+    if isConverged.count > 160:
         isConverged.count = 0
         isConverged.sum = 0
         return True
@@ -388,7 +389,7 @@ with tf.Session() as sess:
         sample = sess.run(z_mean, feed_dict={data: X, batch_size: n_train})
         print('sample.shape: ', sample.shape)
         print('sample: ', sample[:3])
-        up_assign_op, lambda_assign_op, theta_assign_op = reinitialzeGMMVariables(sample)
+        up_assign_op, lambda_assign_op, theta_assign_op, muNew, lambdaNew= reinitialzeGMMVariables(sample)
         sess.run([up_assign_op, lambda_assign_op, theta_assign_op, global_step.assign(0)])
         print('up after reinitial: ', u_p.eval(sess))
         print('lambda_p after reinitial: ', lambda_p.eval(sess))
@@ -410,13 +411,23 @@ with tf.Session() as sess:
             ptr += training_batch_size
             if enableGmmEnsemble and numGmmEnsembleTimes < gmmEnsembleTimes: #and global_step.eval(sess) == gmmEnsembleStep:
                 # gmmEnsembleStep += gmmEnsembleIntervalStep
+                # write current up to file upOld
+                # write g.means_.T to file upNew
+                with open('muOld', 'w') as f_write:
+                    f_write.write(str(u_p.eval(sess)))
                 inp = X[aidx[0:gmmEnsembleBatchSize], :]
                 sample = sess.run(z_mean, feed_dict={data: inp, batch_size: gmmEnsembleBatchSize})
-                up_assign_op, lambda_assign_op, theta_assign_op = reinitialzeGMMVariables(sample)
+                # up_assign_op, lambda_assign_op, theta_assign_op, muNew, sigmaNew = reinitialzeGMMVariables(sample)
+                _, _, _, muNew, sigmaNew = reinitialzeGMMVariables(sample)
+                matchingList = utility.getMuMatchingList(u_p.eval(sess), newMu=muNew)
+                sortedMu = utility.sortByMatchingList(matchingList, muNew)
+                up_assign_op = u_p.assign(sortedMu)
+                sortedSigma = utility.sortByMatchingList(matchingList, sigmaNew)
+                lambda_assign_op = lambda_p.assign(sortedSigma)
                 sess.run([up_assign_op, lambda_assign_op])
+                print('pairList: ', matchingList)
                 print('up after reinitial: ', u_p.eval(sess))
                 print('lambda_p after reinitial: ', lambda_p.eval(sess))
-                # print('theta_p after reinitial: ', theta_p.eval(sess))
                 numGmmEnsembleTimes += 1
                 enableGmmEnsemble = False
                 continue
@@ -430,6 +441,6 @@ with tf.Session() as sess:
         acc_summary = sess.run(merged_acc_op, feed_dict={acc_tensor: acc[0]})
         writer.add_summary(acc_summary, i)
         enableGmmEnsemble = isConverged(acc[0])
-        print('isConverged.sum: %f, isConverged.count: %d' % isConverged.sum, isConverged.count)
+        print('isConverged.sum: %f, isConverged.count: %d' % (isConverged.sum, isConverged.count))
     save_path = saver.save(sess, "./model/model.ckpt")
     print("Model saved in path: %s" % save_path)
